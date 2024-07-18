@@ -4,7 +4,7 @@ provider "aws" {
 
 resource "aws_db_instance" "example" {
   identifier        = "awardsdbinstance"
-  instance_class    = "db.t2.micro"
+  instance_class    = "db.t3.micro"
   allocated_storage = 20
   engine            = "postgres"
   engine_version    = "13"
