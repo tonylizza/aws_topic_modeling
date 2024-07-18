@@ -126,4 +126,4 @@ def process_award_files(directory):
                 load_data_to_rds(award_data)
 
 # Specify the directory containing the award files
-process_award_files('/path/to/awards/files')
+process_award_files('data')

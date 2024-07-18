@@ -1,0 +1,53 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.9'
+
+    - name: Install Terraform
+      run: |
+        sudo apt-get update && sudo apt-get install -y unzip
+        curl -o terraform.zip https://releases.hashicorp.com/terraform/0.14.7/terraform_0.14.7_linux_amd64.zip
+        unzip terraform.zip
+        sudo mv terraform /usr/local/bin/
+
+    - name: Apply Terraform configuration
+      run: |
+        cd terraform
+        terraform init
+        terraform apply -auto-approve
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    - name: Load data into RDS
+      run: |
+        . venv/bin/activate
+        python scripts/load_data.py
+      env:
+        RDS_ENDPOINT: ${{ steps.apply.outputs.rds_endpoint }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    - name: Run tests
+      run: |
+        . venv/bin/activate
+        python -m unittest discover -s tests
+
