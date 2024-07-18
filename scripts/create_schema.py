@@ -8,8 +8,8 @@ def create_schema():
 
     conn = psycopg2.connect(
         dbname='nsf_awards_db',
-        user='mymasteruser',
-        password='mypassword',
+        user='awarddbuser',
+        password='K@mi1saac',
         host=endpoint,
         port='5432'
     )

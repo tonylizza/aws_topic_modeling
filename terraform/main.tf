@@ -8,13 +8,12 @@ resource "aws_db_instance" "example" {
   allocated_storage = 20
   engine            = "postgres"
   engine_version    = "13.3"
-  name              = "nsf_awards_db"
-  username          = "mymasteruser"
-  password          = "mypassword"
+  db_name              = "nsf_awards_db"
+  username          = "awarddbuser"
+  password          = "K@mi1saac"
   publicly_accessible = true
   skip_final_snapshot = true
 
-  vpc_security_group_ids = ["sg-xxxxxxxx"]  # Replace with your security group ID
 
   tags = {
     Name = "AwardsDB"
