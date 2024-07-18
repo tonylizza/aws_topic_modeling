@@ -10,7 +10,7 @@ resource "aws_db_instance" "example" {
   engine_version    = "13"
   db_name              = "nsf_awards_db"
   username          = "awarddbuser"
-  password          = "K@mi1saac"
+  password          = var.db_password
   publicly_accessible = true
   skip_final_snapshot = true
 
