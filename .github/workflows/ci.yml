@@ -40,8 +40,16 @@ jobs:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
-      outputs:
-        rds_endpoint: ${{ steps.create-rds-instance.outputs.rds_endpoint }}
+      uses: hashicorp/setup-terraform@v1
+      with:
+        terraform_wrapper: false
+
+    - name: Get RDS endpoint
+      id: get-rds-endpoint
+      run: |
+        echo "RDS_ENDPOINT=$(terraform -chdir=terraform output -raw rds_endpoint)" >> $GITHUB_ENV
+      env:
+        terraform_wrapper: false
 
     - name: Create database schema
       run: make create-schema
