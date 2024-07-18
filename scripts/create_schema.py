@@ -5,11 +5,12 @@ def create_schema():
     # Read the endpoint from the file
     with open('rds_endpoint.txt', 'r') as f:
         endpoint = f.read().strip()
+        db_password = os.getenv('DB_PASSWORD')
 
     conn = psycopg2.connect(
         dbname='nsf_awards_db',
         user='awarddbuser',
-        password='Kami1saac',
+        password=db_password,
         host=endpoint,
         port='5432'
     )
