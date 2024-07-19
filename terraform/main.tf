@@ -21,5 +21,5 @@ resource "aws_db_instance" "example" {
 }
 
 output "rds_endpoint" {
-  value = regex("^([^:]+)", aws_db_instance..example.endpoint)
+  value = regex("^([^:]+)", aws_db_instance.example.endpoint)
 }
