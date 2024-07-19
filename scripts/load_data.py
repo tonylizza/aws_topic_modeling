@@ -3,6 +3,9 @@ import re
 import psycopg2
 from datetime import datetime
 
+endpoint = os.getenv('RDS_ENDPOINT')
+db_password = os.getenv('DB_PASSWORD')
+
 def parse_award_file(file_content):
     data = {}
     patterns = {
@@ -45,10 +48,10 @@ def parse_award_file(file_content):
 def load_data_to_rds(data):
     conn = psycopg2.connect(
         dbname='nsf_awards_db',
-        user='your_username',
-        password='your_password',
-        host='your_host',
-        port='your_port'
+        user='awarddbuser',
+        password=db_password,
+        host=endpoint,
+        port='5432'
     )
     cur = conn.cursor()
 
