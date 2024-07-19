@@ -46,7 +46,8 @@ jobs:
     - name: Get RDS endpoint
       id: get-rds-endpoint
       run: |
-        echo "RDS_ENDPOINT=$(terraform -chdir=terraform output -raw rds_endpoint)" >> $GITHUB_ENV
+        cd terraform
+        echo "RDS_ENDPOINT=$(terraform output -raw rds_endpoint)" >> $GITHUB_ENV
         echo "RDS_ENDPOINT=${RDS_ENDPOINT}"
 
     - name: Create database schema
