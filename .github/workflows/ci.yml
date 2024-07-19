@@ -57,6 +57,16 @@ jobs:
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
 
+    - name: Create database schema
+      run: |
+        . venv/bin/activate
+        python scripts/create_schema.py
+      env:
+        RDS_ENDPOINT: ${{ env.RDS_ENDPOINT }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+        
     - name: Load data into RDS
       run: |
         . venv/bin/activate
