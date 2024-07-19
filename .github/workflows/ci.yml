@@ -47,14 +47,15 @@ jobs:
       id: get-rds-endpoint
       run: |
         cd terraform
-        echo "RDS_ENDPOINT=$(terraform output -raw rds_endpoint)" >> $GITHUB_ENV
-        echo "RDS_ENDPOINT=${RDS_ENDPOINT}"
-
-    - name: Create database schema
-      run: make create-schema
+        terraform output -raw rds_endpoint > rds_endpoint.txt
+        cat rds_endpoint.txt  # Debugging step to check the output
+        RDS_ENDPOINT=$(cat rds_endpoint.txt)
+        echo "RDS_ENDPOINT=${RDS_ENDPOINT}" >> $GITHUB_ENV
+        echo "RDS_ENDPOINT=${RDS_ENDPOINT}"  # This will print to the standard output
       env:
-        RDS_ENDPOINT: ${{ env.RDS_ENDPOINT }}
-        DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
 
     - name: Load data into RDS
       run: |
