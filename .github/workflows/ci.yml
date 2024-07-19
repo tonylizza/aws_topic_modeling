@@ -21,17 +21,19 @@ jobs:
       with:
         python-version: '3.9'
 
-    - name: Install Terraform
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.1.7
+        terraform_wrapper: false
+
+    - name: Install dependencies
       run: |
         sudo apt-get update && sudo apt-get install -y unzip
-        mkdir -p temp_terraform_install
-        curl -o temp_terraform_install/terraform.zip https://releases.hashicorp.com/terraform/0.14.7/terraform_0.14.7_linux_amd64.zip
-        unzip -o temp_terraform_install/terraform.zip -d temp_terraform_install
-        sudo mv temp_terraform_install/terraform /usr/local/bin/
-        rm -rf temp_terraform_install
         make setup
 
     - name: Apply Terraform configuration
+      id: apply-terraform
       run: |
         cd terraform
         terraform init
@@ -40,12 +42,12 @@ jobs:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
-        terraform_wrapper: false
 
     - name: Get RDS endpoint
       id: get-rds-endpoint
       run: |
         echo "RDS_ENDPOINT=$(terraform -chdir=terraform output -raw rds_endpoint)" >> $GITHUB_ENV
+        echo "RDS_ENDPOINT=${RDS_ENDPOINT}"
 
     - name: Create database schema
       run: make create-schema
