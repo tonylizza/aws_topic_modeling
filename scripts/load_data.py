@@ -3,6 +3,7 @@ import re
 import boto3
 import psycopg2
 from datetime import datetime
+import chardet
 
 endpoint = os.getenv('RDS_ENDPOINT')
 db_password = os.getenv('DB_PASSWORD')
@@ -121,15 +122,29 @@ def load_data_to_rds(data):
 
     conn.commit()
 
+
 def process_s3_objects(bucket):
     paginator = s3.get_paginator('list_objects_v2')
     for page in paginator.paginate(Bucket=bucket):
         for obj in page['Contents']:
             print(f"Processing {obj['Key']}")
+            if obj['Key'].endswith('.html'):
+                print(f"Skipping file {obj['Key']} because it is an HTML file.")
+                continue
             s3_object = s3.get_object(Bucket=bucket, Key=obj['Key'])
-            file_content = s3_object['Body'].read().decode('utf-8')
-            award_data = parse_award_file(file_content)
-            load_data_to_rds(award_data)
+            raw_content = s3_object['Body'].read()
+
+            # Detect encoding
+            result = chardet.detect(raw_content)
+            encoding = result['encoding']
+            print(f"Detected encoding: {encoding}")
+
+            try:
+                file_content = raw_content.decode(encoding)
+                award_data = parse_award_file(file_content)
+                load_data_to_rds(award_data)
+            except UnicodeDecodeError as e:
+                print(f"Skipping file {obj['Key']} due to decode error: {e}")
 
 process_s3_objects(s3_bucket)
 
