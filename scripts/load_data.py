@@ -61,8 +61,10 @@ def load_data_to_rds(data):
     VALUES (%(title)s, %(type)s, %(nsf_org)s, %(latest_amendment_date)s, %(file)s, %(award_number)s, %(award_instr)s, %(prgm_manager)s, %(start_date)s, %(expires)s, %(expected_total_amt)s, %(abstract)s)
     RETURNING id;
     '''
+    print("Executing insert_award_query:", insert_award_query)
     cur.execute(insert_award_query, data)
     award_id = cur.fetchone()[0]
+    print("Inserted award_id:", award_id)  # Debugging statement
 
     # Insert into investigators table
     if data['investigator']:
@@ -74,6 +76,7 @@ def load_data_to_rds(data):
             '''
             name, role = inv.split('(')
             role = role.replace(')', '').strip()
+            print("Executing insert_investigator_query:", insert_investigator_query, (name.strip(), role, award_id))  # Debugging statement
             cur.execute(insert_investigator_query, (name.strip(), role, award_id))
 
     # Insert into sponsors table
@@ -93,6 +96,7 @@ def load_data_to_rds(data):
             VALUES (%s, %s, %s);
             '''
             code, name = program.split()
+            print("Executing insert_program_query:", insert_program_query, (code, name, award_id))  # Debugging statement
             cur.execute(insert_program_query, (code, name, award_id))
 
     # Insert into field_applications table
@@ -104,6 +108,7 @@ def load_data_to_rds(data):
             VALUES (%s, %s, %s);
             '''
             code, name = field.split()
+            print("Executing insert_field_query:", insert_field_query, (code, name, award_id))  # Debugging statement
             cur.execute(insert_field_query, (code, name, award_id))
 
     # Insert into program_refs table
@@ -114,6 +119,7 @@ def load_data_to_rds(data):
             INSERT INTO program_refs (reference, award_id)
             VALUES (%s, %s);
             '''
+            print("Executing insert_ref_query:", insert_ref_query, (ref.strip(), award_id))  # Debugging statement
             cur.execute(insert_ref_query, (ref.strip(), award_id))
 
     conn.commit()
