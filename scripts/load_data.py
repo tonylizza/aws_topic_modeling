@@ -1,13 +1,22 @@
 import os
 import re
+import boto3
 import psycopg2
 from datetime import datetime
 
 endpoint = os.getenv('RDS_ENDPOINT')
 db_password = os.getenv('DB_PASSWORD')
+s3_bucket = os.getenv('S3_BUCKET_RAW')
 
-print(f"RDS_ENDPOINT: {endpoint}")  # Debugging statement
-print(f"DB_PASSWORD is set: {db_password is not None}")  # Debugging statement
+s3 = boto3.client('s3')
+conn = psycopg2.connect(
+    dbname='nsf_awards_db',
+    user='awarddbuser',
+    password=db_password,
+    host=endpoint,
+    port='5432'
+)
+cur = conn.cursor()
 
 def parse_award_file(file_content):
     data = {}
@@ -49,25 +58,14 @@ def parse_award_file(file_content):
     return data
 
 def load_data_to_rds(data):
-    conn = psycopg2.connect(
-        dbname='nsf_awards_db',
-        user='awarddbuser',
-        password=db_password,
-        host=endpoint,
-        port='5432'
-    )
-    cur = conn.cursor()
-
     # Insert into nsf_awards table
     insert_award_query = '''
     INSERT INTO nsf_awards (title, type, nsf_org, latest_amendment_date, file, award_number, award_instr, prgm_manager, start_date, expires, expected_total_amt, abstract)
     VALUES (%(title)s, %(type)s, %(nsf_org)s, %(latest_amendment_date)s, %(file)s, %(award_number)s, %(award_instr)s, %(prgm_manager)s, %(start_date)s, %(expires)s, %(expected_total_amt)s, %(abstract)s)
     RETURNING id;
     '''
-    print("Executing insert_award_query:", insert_award_query)
     cur.execute(insert_award_query, data)
     award_id = cur.fetchone()[0]
-    print("Inserted award_id:", award_id)  # Debugging statement
 
     # Insert into investigators table
     if data['investigator']:
@@ -79,7 +77,6 @@ def load_data_to_rds(data):
             '''
             name, role = inv.split('(')
             role = role.replace(')', '').strip()
-            print("Executing insert_investigator_query:", insert_investigator_query, (name.strip(), role, award_id))  # Debugging statement
             cur.execute(insert_investigator_query, (name.strip(), role, award_id))
 
     # Insert into sponsors table
@@ -99,7 +96,6 @@ def load_data_to_rds(data):
             VALUES (%s, %s, %s);
             '''
             code, name = program.split()
-            print("Executing insert_program_query:", insert_program_query, (code, name, award_id))  # Debugging statement
             cur.execute(insert_program_query, (code, name, award_id))
 
     # Insert into field_applications table
@@ -111,7 +107,6 @@ def load_data_to_rds(data):
             VALUES (%s, %s, %s);
             '''
             code, name = field.split()
-            print("Executing insert_field_query:", insert_field_query, (code, name, award_id))  # Debugging statement
             cur.execute(insert_field_query, (code, name, award_id))
 
     # Insert into program_refs table
@@ -122,22 +117,21 @@ def load_data_to_rds(data):
             INSERT INTO program_refs (reference, award_id)
             VALUES (%s, %s);
             '''
-            print("Executing insert_ref_query:", insert_ref_query, (ref.strip(), award_id))  # Debugging statement
             cur.execute(insert_ref_query, (ref.strip(), award_id))
 
     conn.commit()
-    cur.close()
-    conn.close()
 
-def process_award_files(directory):
-    print(f"Directory name {directory}")
-    for root, _, files in os.walk(directory):
-        for file in files:
-            print(f"File {file}")
-            with open(os.path.join(root, file), 'r') as f:
-                file_content = f.read()
-                award_data = parse_award_file(file_content)
-                load_data_to_rds(award_data)
+def process_s3_objects(bucket):
+    paginator = s3.get_paginator('list_objects_v2')
+    for page in paginator.paginate(Bucket=bucket):
+        for obj in page['Contents']:
+            print(f"Processing {obj['Key']}")
+            s3_object = s3.get_object(Bucket=bucket, Key=obj['Key'])
+            file_content = s3_object['Body'].read().decode('utf-8')
+            award_data = parse_award_file(file_content)
+            load_data_to_rds(award_data)
 
-# Specify the directory containing the award files
-process_award_files('../data')
+process_s3_objects(s3_bucket)
+
+cur.close()
+conn.close()
