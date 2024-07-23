@@ -50,7 +50,13 @@ def parse_award_file(file_content):
     # Parsing date fields
     for date_field in ['latest_amendment_date', 'start_date', 'expires']:
         if data[date_field]:
-            data[date_field] = datetime.strptime(data[date_field], '%B %d, %Y').date()
+            # Remove any extra text after the date
+            cleaned_date = re.sub(r'\s+\(.*\)', '', data[date_field])
+            try:
+                data[date_field] = datetime.strptime(cleaned_date, '%B %d, %Y').date()
+            except ValueError as e:
+                print(f"Error parsing date for {date_field}: {cleaned_date}, error: {e}")
+                data[date_field] = None
 
     # Convert expected_total_amt to float
     if data['expected_total_amt']:
@@ -122,7 +128,6 @@ def load_data_to_rds(data):
 
     conn.commit()
 
-
 def process_s3_objects(bucket):
     paginator = s3.get_paginator('list_objects_v2')
     for page in paginator.paginate(Bucket=bucket):
@@ -131,6 +136,7 @@ def process_s3_objects(bucket):
             if obj['Key'].endswith('.html'):
                 print(f"Skipping file {obj['Key']} because it is an HTML file.")
                 continue
+
             s3_object = s3.get_object(Bucket=bucket, Key=obj['Key'])
             raw_content = s3_object['Body'].read()
 
@@ -142,6 +148,9 @@ def process_s3_objects(bucket):
             try:
                 file_content = raw_content.decode(encoding)
                 award_data = parse_award_file(file_content)
+                if not any(award_data.values()):
+                    print(f"Skipping file {obj['Key']} because it does not contain expected patterns.")
+                    continue
                 load_data_to_rds(award_data)
             except UnicodeDecodeError as e:
                 print(f"Skipping file {obj['Key']} due to decode error: {e}")
