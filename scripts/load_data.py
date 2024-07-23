@@ -130,9 +130,10 @@ def load_data_to_rds(data):
     conn.close()
 
 def process_award_files(directory):
-    print("Start parsing of data files")
+    print(f"Directory name {directory}")
     for root, _, files in os.walk(directory):
         for file in files:
+            print(f"File {file}")
             with open(os.path.join(root, file), 'r') as f:
                 file_content = f.read()
                 award_data = parse_award_file(file_content)
