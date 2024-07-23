@@ -6,6 +6,9 @@ from datetime import datetime
 endpoint = os.getenv('RDS_ENDPOINT')
 db_password = os.getenv('DB_PASSWORD')
 
+print(f"RDS_ENDPOINT: {endpoint}")  # Debugging statement
+print(f"DB_PASSWORD is set: {db_password is not None}")  # Debugging statement
+
 def parse_award_file(file_content):
     data = {}
     patterns = {
@@ -127,6 +130,7 @@ def load_data_to_rds(data):
     conn.close()
 
 def process_award_files(directory):
+    print("Start parsing of data files")
     for root, _, files in os.walk(directory):
         for file in files:
             with open(os.path.join(root, file), 'r') as f:
