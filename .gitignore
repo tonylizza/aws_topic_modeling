@@ -1,3 +1,5 @@
 #Ignore data directory
 data/
 test_db.py
+create_local_schema.py
+load_local_data.py

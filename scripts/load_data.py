@@ -102,7 +102,14 @@ def load_data_to_rds(data):
             INSERT INTO nsf_programs (code, name, award_id)
             VALUES (%s, %s, %s);
             '''
-            code, name = program.split()
+            # Split the program string by the first space
+            parts = program.split(maxsplit=1)
+            if len(parts) == 2:
+                code, name = parts
+            else:
+                # If there's no space, handle it appropriately (e.g., log an error, skip, etc.)
+                code = parts[0]
+                name = ''
             cur.execute(insert_program_query, (code, name, award_id))
 
     # Insert into field_applications table
@@ -113,7 +120,14 @@ def load_data_to_rds(data):
             INSERT INTO field_applications (code, name, award_id)
             VALUES (%s, %s, %s);
             '''
-            code, name = field.split()
+            # Split the field string by the first space
+            parts = field.split(maxsplit=1)
+            if len(parts) == 2:
+                code, name = parts
+            else:
+                # If there's no space, handle it appropriately (e.g., log an error, skip, etc.)
+                code = parts[0]
+                name = ''
             cur.execute(insert_field_query, (code, name, award_id))
 
     # Insert into program_refs table
@@ -144,6 +158,10 @@ def process_s3_objects(bucket):
             result = chardet.detect(raw_content)
             encoding = result['encoding']
             print(f"Detected encoding: {encoding}")
+
+            if not encoding:
+                print(f"Skipping file {obj['Key']} because encoding could not be detected.")
+                continue
 
             try:
                 file_content = raw_content.decode(encoding)
