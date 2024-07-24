@@ -9,6 +9,13 @@ endpoint = os.getenv('RDS_ENDPOINT')
 db_password = os.getenv('DB_PASSWORD')
 s3_bucket = os.getenv('S3_BUCKET_RAW')
 
+# Clean data by removing null characters
+def clean_data(data):
+    for key, value in data.items():
+        if isinstance(value, str):
+            data[key] = value.replace('\x00', '')
+    return data
+
 s3 = boto3.client('s3')
 conn = psycopg2.connect(
     dbname='nsf_awards_db',
@@ -62,88 +69,90 @@ def parse_award_file(file_content):
     if data['expected_total_amt']:
         data['expected_total_amt'] = float(data['expected_total_amt'].replace(',', ''))
 
-    return data
+    return clean_data(data)
 
-def load_data_to_rds(data):
+def load_data_to_rds(records):
     # Insert into nsf_awards table
     insert_award_query = '''
     INSERT INTO nsf_awards (title, type, nsf_org, latest_amendment_date, file, award_number, award_instr, prgm_manager, start_date, expires, expected_total_amt, abstract)
-    VALUES (%(title)s, %(type)s, %(nsf_org)s, %(latest_amendment_date)s, %(file)s, %(award_number)s, %(award_instr)s, %(prgm_manager)s, %(start_date)s, %(expires)s, %(expected_total_amt)s, %(abstract)s)
+    VALUES %s
     RETURNING id;
     '''
-    cur.execute(insert_award_query, data)
-    award_id = cur.fetchone()[0]
+    award_values = [
+        (rec['title'], rec['type'], rec['nsf_org'], rec['latest_amendment_date'], rec['file'],
+         rec['award_number'], rec['award_instr'], rec['prgm_manager'], rec['start_date'],
+         rec['expires'], rec['expected_total_amt'], rec['abstract'])
+        for rec in records
+    ]
 
-    # Insert into investigators table
-    if data['investigator']:
-        investigators = data['investigator'].split('\n')
-        for inv in investigators:
-            insert_investigator_query = '''
-            INSERT INTO investigators (name, role, award_id)
-            VALUES (%s, %s, %s);
+    psycopg2.extras.execute_values(cur, insert_award_query, award_values)
+    award_ids = cur.fetchall()
+
+    for award_id, rec in zip(award_ids, records):
+        award_id = award_id[0]
+
+        if rec['investigator']:
+            investigators = rec['investigator'].split('\n')
+            for inv in investigators:
+                insert_investigator_query = '''
+                INSERT INTO investigators (name, role, award_id)
+                VALUES (%s, %s, %s);
+                '''
+                name, role = inv.split('(')
+                role = role.replace(')', '').strip()
+                cur.execute(insert_investigator_query, (name.strip(), role, award_id))
+
+        if rec['sponsor']:
+            insert_sponsor_query = '''
+            INSERT INTO sponsors (name, address, phone, award_id)
+            VALUES (%s, %s, %s, %s);
             '''
-            name, role = inv.split('(')
-            role = role.replace(')', '').strip()
-            cur.execute(insert_investigator_query, (name.strip(), role, award_id))
+            cur.execute(insert_sponsor_query, (rec['sponsor'], rec['sponsor_address'], rec['sponsor_phone'], award_id))
 
-    # Insert into sponsors table
-    if data['sponsor']:
-        insert_sponsor_query = '''
-        INSERT INTO sponsors (name, address, phone, award_id)
-        VALUES (%s, %s, %s, %s);
-        '''
-        cur.execute(insert_sponsor_query, (data['sponsor'], data['sponsor_address'], data['sponsor_phone'], award_id))
+        if rec['nsf_program']:
+            programs = rec['nsf_program'].split('\n')
+            for program in programs:
+                insert_program_query = '''
+                INSERT INTO nsf_programs (code, name, award_id)
+                VALUES (%s, %s, %s);
+                '''
+                parts = program.split(maxsplit=1)
+                if len(parts) == 2:
+                    code, name = parts
+                else:
+                    code = parts[0]
+                    name = ''
+                cur.execute(insert_program_query, (code, name, award_id))
 
-    # Insert into nsf_programs table
-    if data['nsf_program']:
-        programs = data['nsf_program'].split('\n')
-        for program in programs:
-            insert_program_query = '''
-            INSERT INTO nsf_programs (code, name, award_id)
-            VALUES (%s, %s, %s);
-            '''
-            # Split the program string by the first space
-            parts = program.split(maxsplit=1)
-            if len(parts) == 2:
-                code, name = parts
-            else:
-                # If there's no space, handle it appropriately (e.g., log an error, skip, etc.)
-                code = parts[0]
-                name = ''
-            cur.execute(insert_program_query, (code, name, award_id))
+        if rec['fld_applictn']:
+            fields = rec['fld_applictn'].split('\n')
+            for field in fields:
+                insert_field_query = '''
+                INSERT INTO field_applications (code, name, award_id)
+                VALUES (%s, %s, %s);
+                '''
+                parts = field.split(maxsplit=1)
+                if len(parts) == 2:
+                    code, name = parts
+                else:
+                    code = parts[0]
+                    name = ''
+                cur.execute(insert_field_query, (code, name, award_id))
 
-    # Insert into field_applications table
-    if data['fld_applictn']:
-        fields = data['fld_applictn'].split('\n')
-        for field in fields:
-            insert_field_query = '''
-            INSERT INTO field_applications (code, name, award_id)
-            VALUES (%s, %s, %s);
-            '''
-            # Split the field string by the first space
-            parts = field.split(maxsplit=1)
-            if len(parts) == 2:
-                code, name = parts
-            else:
-                # If there's no space, handle it appropriately (e.g., log an error, skip, etc.)
-                code = parts[0]
-                name = ''
-            cur.execute(insert_field_query, (code, name, award_id))
-
-    # Insert into program_refs table
-    if data['program_ref']:
-        references = data['program_ref'].split(',')
-        for ref in references:
-            insert_ref_query = '''
-            INSERT INTO program_refs (reference, award_id)
-            VALUES (%s, %s);
-            '''
-            cur.execute(insert_ref_query, (ref.strip(), award_id))
+        if rec['program_ref']:
+            references = rec['program_ref'].split(',')
+            for ref in references:
+                insert_ref_query = '''
+                INSERT INTO program_refs (reference, award_id)
+                VALUES (%s, %s);
+                '''
+                cur.execute(insert_ref_query, (ref.strip(), award_id))
 
     conn.commit()
 
 def process_s3_objects(bucket):
     paginator = s3.get_paginator('list_objects_v2')
+    records = []
     for page in paginator.paginate(Bucket=bucket):
         for obj in page['Contents']:
             print(f"Processing {obj['Key']}")
@@ -169,9 +178,12 @@ def process_s3_objects(bucket):
                 if not any(award_data.values()):
                     print(f"Skipping file {obj['Key']} because it does not contain expected patterns.")
                     continue
-                load_data_to_rds(award_data)
+                records.append(award_data)
             except UnicodeDecodeError as e:
                 print(f"Skipping file {obj['Key']} due to decode error: {e}")
+
+    if records:
+        load_data_to_rds(records)
 
 process_s3_objects(s3_bucket)
 
