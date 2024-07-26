@@ -67,6 +67,9 @@ def parse_award_file(file_content):
         data["sponsor_phone"] = None
         print("Sponsor information not found.")
 
+    if data["abstract"]:
+        data["abstract"] = re.sub(r'\s*\n\s*', ' ', data["abstract"])
+
     # Parsing date fields
     for date_field in ['latest_amendment_date', 'start_date', 'expires']:
         if data[date_field]:
