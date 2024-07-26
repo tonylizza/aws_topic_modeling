@@ -191,9 +191,12 @@ def load_data_to_rds(records):
                         INSERT INTO investigators (name, role, award_id)
                         VALUES (%s, %s, %s);
                         '''
-                        name, role = inv.split('(')
-                        role = role.replace(')', '').strip()
-                        cur.execute(insert_investigator_query, (name.strip(), role, award_id))
+                        try:
+                            name, role = inv.split('(')
+                            role = role.replace(')', '').strip()
+                            cur.execute(insert_investigator_query, (name.strip(), role, award_id))
+                        except ValueError:
+                            print(f"Skipping malformed entry {inv}")
 
                 if rec['sponsor']:
                     insert_sponsor_query = '''
