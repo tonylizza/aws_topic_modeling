@@ -106,6 +106,10 @@ def load_data_to_rds(records):
         for rec in records
     ]
 
+    print("Prepared award values for batch insert:")
+    for value in award_values:
+        print(value)  # Debugging statement to check the structure
+
     try:
         execute_values(cur, insert_award_query, award_values)
         award_ids = cur.fetchall()
