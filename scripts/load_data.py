@@ -39,7 +39,7 @@ def parse_award_file(file_content):
         "expires": r"Expires\s+:\s+(.+)",
         "expected_total_amt": r"Expected\s+Total Amt\.\s+:\s+\$(.+)\s+\(Estimated\)",
         "investigator": r"Investigator\s*:\s+(.+)",
-        "abstract": r"Abstract\s+:\s+(.+)",
+        "abstract": r"Abstract\s+:\s+([\s\S]+)",
         "nsf_program": r"NSF Program\s+:\s+(.+)",
         "fld_applictn": r"Fld Applictn\s*:\s+(.+)",
         "program_ref": r"Program Ref\s+:\s+(.+)",
