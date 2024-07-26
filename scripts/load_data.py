@@ -192,7 +192,7 @@ def load_data_to_rds(records):
                         VALUES (%s, %s, %s);
                         '''
                         try:
-                            name, role = inv.split('(')
+                            name, role = inv.split('(', 1)
                             role = role.replace(')', '').strip()
                             cur.execute(insert_investigator_query, (name.strip(), role, award_id))
                         except ValueError:
