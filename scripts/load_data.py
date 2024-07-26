@@ -11,6 +11,7 @@ import concurrent.futures
 endpoint = os.getenv('RDS_ENDPOINT')
 db_password = os.getenv('DB_PASSWORD')
 s3_bucket = os.getenv('S3_BUCKET_RAW')
+s3_directory = os.getenv('S3_DIRECTORY', 'Part1/awards_1990/awd_1990_00')  # Specify the directory within the bucket
 batch_size = 1000  # Adjust based on performance testing
 
 # Initialize S3 client
@@ -26,30 +27,45 @@ def clean_data(data):
 def parse_award_file(file_content):
     data = {}
     patterns = {
-        "title": r"Title\s+:\s+(.*)",
-        "type": r"Type\s+:\s+(.*)",
-        "nsf_org": r"NSF Org\s+:\s+(.*)",
-        "latest_amendment_date": r"Latest\s+Amendment\s+Date\s+:\s+(.*)",
-        "file": r"File\s+:\s+(.*)",
-        "award_number": r"Award Number\s+:\s+(.*)",
-        "award_instr": r"Award Instr\.\s+:\s+(.*)",
-        "prgm_manager": r"Prgm Manager\s+:\s+(.*)",
-        "start_date": r"Start Date\s+:\s+(.*)",
-        "expires": r"Expires\s+:\s+(.*)",
-        "expected_total_amt": r"Expected\s+Total Amt\.\s+:\s+\$(.*)\s+\(Estimated\)",
-        "investigator": r"Investigator\s+:\s+(.*)",
-        "sponsor": r"Sponsor\s+:\s+(.*)",
-        "sponsor_address": r"Sponsor\s+:\s+.*\n\s+(.*)",
-        "sponsor_phone": r"Sponsor\s+:\s+.*\n\s+.*\n\s+(.*)",
-        "nsf_program": r"NSF Program\s+:\s+(.*)",
-        "fld_applictn": r"Fld Applictn\s+:\s+(.*)",
-        "program_ref": r"Program Ref\s+:\s+(.*)",
-        "abstract": r"Abstract\s+:\s+(.*)"
+        "title": r"Title\s+:\s+(.+)",
+        "type": r"Type\s+:\s+(.+)",
+        "nsf_org": r"NSF Org\s+:\s+(.+)",
+        "latest_amendment_date": r"Latest\s+Amendment\s+Date\s+:\s+(.+)",
+        "file": r"File\s+:\s+(.+)",
+        "award_number": r"Award Number\s*:\s+(.+)",
+        "award_instr": r"Award Instr\.\s*:\s+(.+)",
+        "prgm_manager": r"Prgm Manager\s*:\s+(.+)",
+        "start_date": r"Start Date\s+:\s+(.+)",
+        "expires": r"Expires\s+:\s+(.+)",
+        "expected_total_amt": r"Expected\s+Total Amt\.\s+:\s+\$(.+)\s+\(Estimated\)",
+        "investigator": r"Investigator\s*:\s+(.+)",
+        "abstract": r"Abstract\s+:\s+(.+)",
+        "nsf_program": r"NSF Program\s+:\s+(.+)",
+        "fld_applictn": r"Fld Applictn\s*:\s+(.+)",
+        "program_ref": r"Program Ref\s+:\s+(.+)",
     }
 
     for key, pattern in patterns.items():
         match = re.search(pattern, file_content, re.MULTILINE)
-        data[key] = match.group(1).strip() if match else None
+        if match:
+            data[key] = match.group(1).strip()
+        else:
+            data[key] = None
+            print(f"Pattern not found for {key}")
+
+    # Extract sponsor information
+    sponsor_match = re.search(
+        r"Sponsor\s*:\s*(.*?)\n\s*(.*?)\n\s*(.*?)(\d{3}/\d{3}-\d{4})", file_content, re.MULTILINE
+    )
+    if sponsor_match:
+        data["sponsor"] = sponsor_match.group(1).strip()
+        data["sponsor_address"] = f"{sponsor_match.group(2).strip()}, {sponsor_match.group(3).strip()}"
+        data["sponsor_phone"] = sponsor_match.group(4).strip()
+    else:
+        data["sponsor"] = None
+        data["sponsor_address"] = None
+        data["sponsor_phone"] = None
+        print("Sponsor information not found.")
 
     # Parsing date fields
     for date_field in ['latest_amendment_date', 'start_date', 'expires']:
@@ -265,7 +281,8 @@ def process_s3_objects(bucket, keys):
 def main():
     paginator = s3.get_paginator('list_objects_v2')
     keys = []
-    for page in paginator.paginate(Bucket=s3_bucket):
+    prefix = s3_directory if s3_directory else ''
+    for page in paginator.paginate(Bucket=s3_bucket, Prefix=prefix):
         for obj in page['Contents']:
             keys.append(obj['Key'])
 

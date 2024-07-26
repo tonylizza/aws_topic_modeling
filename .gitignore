@@ -3,3 +3,4 @@ data/
 test_db.py
 create_local_schema.py
 load_local_data.py
+parse_local_data.py
