@@ -11,7 +11,7 @@ import concurrent.futures
 endpoint = os.getenv('RDS_ENDPOINT')
 db_password = os.getenv('DB_PASSWORD')
 s3_bucket = os.getenv('S3_BUCKET_RAW')
-s3_directory = os.getenv('S3_DIRECTORY', 'Part1/awards_1990/awd_1990_00')  # Specify the directory within the bucket
+s3_directory = os.getenv('S3_DIRECTORY', '')  # Specify the directory within the bucket
 batch_size = 1000  # Adjust based on performance testing
 
 # Initialize S3 client
