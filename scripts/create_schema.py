@@ -40,7 +40,6 @@ def create_schema():
     CREATE TABLE IF NOT EXISTS award_investigators (
         award_id INTEGER REFERENCES nsf_awards(id),
         investigator_id INTEGER REFERENCES investigators(id),
-        role VARCHAR(255),
         PRIMARY KEY (award_id, investigator_id)
     );
 
