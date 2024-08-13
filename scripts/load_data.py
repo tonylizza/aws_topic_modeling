@@ -68,7 +68,14 @@ def parse_award_file(file_content):
         print("Sponsor information not found.")
 
     if data["abstract"]:
-        data["abstract"] = re.sub(r'\s*\n\s*', ' ', data["abstract"])
+        # Replace all instances of multiple whitespace characters with a single space
+        data["abstract"] = re.sub(r'\s+', ' ', data["abstract"])
+
+        # Strip out strings of dashes or equals where five or more appear in succession
+        data["abstract"] = re.sub(r'[-=]{5,}', '', data["abstract"])
+
+        # Remove leading numerical strings that are exactly seven digits long
+        data["abstract"] = re.sub(r'^\d{7}\s+', '', data["abstract"])
 
     # Parsing date fields
     for date_field in ['latest_amendment_date', 'start_date', 'expires']:
@@ -102,16 +109,70 @@ def load_data_to_rds(records):
     VALUES %s
     RETURNING id;
     '''
+
+    insert_investigator_query = '''
+    INSERT INTO investigators (name)
+    VALUES (%s)
+    ON CONFLICT (name) DO NOTHING
+    RETURNING id;
+    '''
+
+    insert_award_investigator_query = '''
+    INSERT INTO award_investigators (award_id, investigator_id, role)
+    VALUES (%s, %s, %s)
+    ON CONFLICT DO NOTHING;
+    '''
+
+    insert_sponsor_query = '''
+    INSERT INTO sponsors (name, address, phone)
+    VALUES (%s, %s, %s)
+    ON CONFLICT (name) DO UPDATE SET address = EXCLUDED.address, phone = EXCLUDED.phone
+    RETURNING id;
+    '''
+
+    insert_award_sponsor_query = '''
+    INSERT INTO award_sponsors (award_id, sponsor_id)
+    VALUES (%s, %s)
+    ON CONFLICT DO NOTHING;
+    '''
+
+    insert_program_query = '''
+    INSERT INTO nsf_programs (code, name)
+    VALUES (%s, %s)
+    ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name
+    RETURNING id;
+    '''
+
+    insert_award_program_query = '''
+    INSERT INTO award_programs (award_id, program_id)
+    VALUES (%s, %s)
+    ON CONFLICT DO NOTHING;
+    '''
+
+    insert_field_query = '''
+    INSERT INTO field_applications (code, name)
+    VALUES (%s, %s)
+    ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name
+    RETURNING id;
+    '''
+
+    insert_award_field_query = '''
+    INSERT INTO award_field_applications (award_id, field_application_id)
+    VALUES (%s, %s)
+    ON CONFLICT DO NOTHING;
+    '''
+
+    insert_ref_query = '''
+    INSERT INTO program_refs (reference, award_id)
+    VALUES (%s, %s);
+    '''
+
     award_values = [
         (rec['title'], rec['type'], rec['nsf_org'], rec['latest_amendment_date'], rec['file'],
          rec['award_number'], rec['award_instr'], rec['prgm_manager'], rec['start_date'],
          rec['expires'], rec['expected_total_amt'], rec['abstract'])
         for rec in records
     ]
-
-    print("Prepared award values for batch insert:")
-    for value in award_values:
-        print(value)  # Debugging statement to check the structure
 
     try:
         execute_values(cur, insert_award_query, award_values)
@@ -123,140 +184,54 @@ def load_data_to_rds(records):
             if rec['investigator']:
                 investigators = rec['investigator'].split('\n')
                 for inv in investigators:
-                    insert_investigator_query = '''
-                    INSERT INTO investigators (name, role, award_id)
-                    VALUES (%s, %s, %s);
-                    '''
                     try:
-                        name, role = inv.split('(')
-                        role = role.replace(')', '').strip()
-                        cur.execute(insert_investigator_query, (name.strip(), role, award_id))
+                        name_role = inv.split('(', 1)
+                        name = name_role[0].strip()
+                        role = name_role[1].replace(')', '').strip() if len(name_role) > 1 else ''
+                        cur.execute(insert_investigator_query, (name,))
+                        investigator_id = cur.fetchone()[0]
+                        cur.execute(insert_award_investigator_query, (award_id, investigator_id, role))
                     except ValueError:
                         print(f"Skipping malformed entry {inv}")
 
             if rec['sponsor']:
-                insert_sponsor_query = '''
-                INSERT INTO sponsors (name, address, phone, award_id)
-                VALUES (%s, %s, %s, %s);
-                '''
-                cur.execute(insert_sponsor_query, (rec['sponsor'], rec['sponsor_address'], rec['sponsor_phone'], award_id))
+                cur.execute(insert_sponsor_query, (rec['sponsor'], rec['sponsor_address'], rec['sponsor_phone']))
+                sponsor_id = cur.fetchone()[0]
+                cur.execute(insert_award_sponsor_query, (award_id, sponsor_id))
 
             if rec['nsf_program']:
                 programs = rec['nsf_program'].split('\n')
                 for program in programs:
-                    insert_program_query = '''
-                    INSERT INTO nsf_programs (code, name, award_id)
-                    VALUES (%s, %s, %s);
-                    '''
                     parts = program.split(maxsplit=1)
-                    if len(parts) == 2:
-                        code, name = parts
-                    else:
-                        code = parts[0]
-                        name = ''
-                    cur.execute(insert_program_query, (code, name, award_id))
+                    code = parts[0]
+                    name = parts[1] if len(parts) > 1 else ''
+                    cur.execute(insert_program_query, (code, name))
+                    program_id = cur.fetchone()[0]
+                    cur.execute(insert_award_program_query, (award_id, program_id))
 
             if rec['fld_applictn']:
                 fields = rec['fld_applictn'].split('\n')
                 for field in fields:
-                    insert_field_query = '''
-                    INSERT INTO field_applications (code, name, award_id)
-                    VALUES (%s, %s, %s);
-                    '''
                     parts = field.split(maxsplit=1)
-                    if len(parts) == 2:
-                        code, name = parts
-                    else:
-                        code = parts[0]
-                        name = ''
-                    cur.execute(insert_field_query, (code, name, award_id))
+                    code = parts[0]
+                    name = parts[1] if len(parts) > 1 else ''
+                    cur.execute(insert_field_query, (code, name))
+                    field_application_id = cur.fetchone()[0]
+                    cur.execute(insert_award_field_query, (award_id, field_application_id))
 
             if rec['program_ref']:
                 references = rec['program_ref'].split(',')
                 for ref in references:
-                    insert_ref_query = '''
-                    INSERT INTO program_refs (reference, award_id)
-                    VALUES (%s, %s);
-                    '''
                     cur.execute(insert_ref_query, (ref.strip(), award_id))
 
         conn.commit()
     except psycopg2.Error as e:
         print(f"Batch insert error: {e}")
         conn.rollback()
-        # Attempt to insert records individually
-        for rec in records:
-            try:
-                cur.execute(insert_award_query, rec)
-                award_id = cur.fetchone()[0]
-
-                if rec['investigator']:
-                    investigators = rec['investigator'].split('\n')
-                    for inv in investigators:
-                        insert_investigator_query = '''
-                        INSERT INTO investigators (name, role, award_id)
-                        VALUES (%s, %s, %s);
-                        '''
-                        try:
-                            name, role = inv.split('(', 1)
-                            role = role.replace(')', '').strip()
-                            cur.execute(insert_investigator_query, (name.strip(), role, award_id))
-                        except ValueError:
-                            print(f"Skipping malformed entry {inv}")
-
-                if rec['sponsor']:
-                    insert_sponsor_query = '''
-                    INSERT INTO sponsors (name, address, phone, award_id)
-                    VALUES (%s, %s, %s, %s);
-                    '''
-                    cur.execute(insert_sponsor_query, (rec['sponsor'], rec['sponsor_address'], rec['sponsor_phone'], award_id))
-
-                if rec['nsf_program']:
-                    programs = rec['nsf_program'].split('\n')
-                    for program in programs:
-                        insert_program_query = '''
-                        INSERT INTO nsf_programs (code, name, award_id)
-                        VALUES (%s, %s, %s);
-                        '''
-                        parts = program.split(maxsplit=1)
-                        if len(parts) == 2:
-                            code, name = parts
-                        else:
-                            code = parts[0]
-                            name = ''
-                        cur.execute(insert_program_query, (code, name, award_id))
-
-                if rec['fld_applictn']:
-                    fields = rec['fld_applictn'].split('\n')
-                    for field in fields:
-                        insert_field_query = '''
-                        INSERT INTO field_applications (code, name, award_id)
-                        VALUES (%s, %s, %s);
-                        '''
-                        parts = field.split(maxsplit=1)
-                        if len(parts) == 2:
-                            code, name = parts
-                        else:
-                            code = parts[0]
-                            name = ''
-                        cur.execute(insert_field_query, (code, name, award_id))
-
-                if rec['program_ref']:
-                    references = rec['program_ref'].split(',')
-                    for ref in references:
-                        insert_ref_query = '''
-                        INSERT INTO program_refs (reference, award_id)
-                        VALUES (%s, %s);
-                        '''
-                        cur.execute(insert_ref_query, (ref.strip(), award_id))
-
-                conn.commit()
-            except psycopg2.Error as e:
-                print(f"Error inserting record: {e}")
-                conn.rollback()
 
     cur.close()
     conn.close()
+
 
 def process_s3_objects(bucket, keys):
     records = []
