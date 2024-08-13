@@ -161,16 +161,13 @@ def load_data_to_rds(records):
                     ON CONFLICT (award_id, investigator_id) DO UPDATE SET role = EXCLUDED.role;
                 """, award_inv_values)
 
-            # Insert sponsor (this is typically one per award, so we keep it as is)
+            # Insert sponsor
             if record['sponsor']:
                 cur.execute("INSERT INTO sponsors (name, address, phone) VALUES (%s, %s, %s) ON CONFLICT (name) DO UPDATE SET address = EXCLUDED.address, phone = EXCLUDED.phone RETURNING id;",
                             (record['sponsor'], record['sponsor_address'], record['sponsor_phone']))
                 sponsor_id = cur.fetchone()[0]
-                cur.execute("""
-                    INSERT INTO award_sponsors (award_id, sponsor_id) 
-                    VALUES (%s, %s) 
-                    ON CONFLICT (award_id, sponsor_id) DO NOTHING;
-                """, (award_id, sponsor_id))
+                cur.execute("INSERT INTO award_sponsors (award_id, sponsor_id) VALUES (%s, %s) ON CONFLICT DO NOTHING;",
+                            (award_id, sponsor_id))
 
             # Batch insert for NSF programs
             if record['nsf_program']:
@@ -180,11 +177,7 @@ def load_data_to_rds(records):
                 program_ids = cur.fetchall()
                 
                 award_program_values = [(award_id, program_id[0]) for program_id in program_ids]
-                execute_values(cur, """
-                    INSERT INTO award_programs (award_id, program_id) 
-                    VALUES %s 
-                    ON CONFLICT (award_id, program_id) DO NOTHING;
-                """, award_program_values)
+                execute_values(cur, "INSERT INTO award_programs (award_id, program_id) VALUES %s ON CONFLICT DO NOTHING;", award_program_values)
 
             # Batch insert for field applications
             if record['fld_applictn']:
@@ -194,26 +187,19 @@ def load_data_to_rds(records):
                 field_ids = cur.fetchall()
                 
                 award_field_values = [(award_id, field_id[0]) for field_id in field_ids]
-                execute_values(cur, """
-                    INSERT INTO award_field_applications (award_id, field_application_id) 
-                    VALUES %s 
-                    ON CONFLICT (award_id, field_application_id) DO NOTHING;
-                """, award_field_values)
+                execute_values(cur, "INSERT INTO award_field_applications (award_id, field_application_id) VALUES %s ON CONFLICT DO NOTHING;", award_field_values)
 
             # Batch insert for program references
             if record['program_ref']:
                 ref_values = [(ref.strip(), award_id) for ref in record['program_ref'].split(',')]
-                execute_values(cur, """
-                    INSERT INTO program_refs (reference, award_id) 
-                    VALUES %s 
-                    ON CONFLICT (reference, award_id) DO NOTHING;
-                """, ref_values)
+                execute_values(cur, "INSERT INTO program_refs (reference, award_id) VALUES %s;", ref_values)
 
         conn.commit()
         logging.info(f"Successfully inserted batch of {len(records)} records")
     except Exception as e:
         conn.rollback()
         logging.error(f"Error inserting batch: {e}")
+        logging.error(f"Detailed error: {str(e)}")
     finally:
         cur.close()
         conn.close()
