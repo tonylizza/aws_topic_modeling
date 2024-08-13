@@ -143,7 +143,11 @@ def load_data_to_rds(records):
                     (award_id, inv_id[0], name.split('(')[1].replace(')', '').strip() if '(' in name else '')
                     for inv_id, name in zip(inv_ids, investigators)
                 ]
-                execute_values(cur, "INSERT INTO award_investigators (award_id, investigator_id, role) VALUES %s ON CONFLICT DO NOTHING;", award_inv_values)
+                execute_values(cur, """
+                    INSERT INTO award_investigators (award_id, investigator_id, role) 
+                    VALUES %s 
+                    ON CONFLICT (award_id, investigator_id) DO UPDATE SET role = EXCLUDED.role;
+                """, award_inv_values)
 
             # Insert sponsor (this is typically one per award, so we keep it as is)
             if record['sponsor']:
