@@ -122,11 +122,23 @@ def load_data_to_rds(records):
             INSERT INTO nsf_awards (title, type, nsf_org, latest_amendment_date, file, award_number, 
                                     award_instr, prgm_manager, start_date, expires, expected_total_amt, abstract)
             VALUES %s
+            ON CONFLICT (award_number) DO UPDATE SET
+                title = EXCLUDED.title,
+                type = EXCLUDED.type,
+                nsf_org = EXCLUDED.nsf_org,
+                latest_amendment_date = EXCLUDED.latest_amendment_date,
+                file = EXCLUDED.file,
+                award_instr = EXCLUDED.award_instr,
+                prgm_manager = EXCLUDED.prgm_manager,
+                start_date = EXCLUDED.start_date,
+                expires = EXCLUDED.expires,
+                expected_total_amt = EXCLUDED.expected_total_amt,
+                abstract = EXCLUDED.abstract
             RETURNING id;
         """, award_values)
         
         award_ids = cur.fetchall()
-        logging.info(f"Inserted {len(award_ids)} awards in batch")
+        logging.info(f"Inserted or updated {len(award_ids)} awards in batch")
 
         # Process related data for each award
         for award_id, record in zip(award_ids, records):
@@ -154,8 +166,11 @@ def load_data_to_rds(records):
                 cur.execute("INSERT INTO sponsors (name, address, phone) VALUES (%s, %s, %s) ON CONFLICT (name) DO UPDATE SET address = EXCLUDED.address, phone = EXCLUDED.phone RETURNING id;",
                             (record['sponsor'], record['sponsor_address'], record['sponsor_phone']))
                 sponsor_id = cur.fetchone()[0]
-                cur.execute("INSERT INTO award_sponsors (award_id, sponsor_id) VALUES (%s, %s) ON CONFLICT DO NOTHING;",
-                            (award_id, sponsor_id))
+                cur.execute("""
+                    INSERT INTO award_sponsors (award_id, sponsor_id) 
+                    VALUES (%s, %s) 
+                    ON CONFLICT (award_id, sponsor_id) DO NOTHING;
+                """, (award_id, sponsor_id))
 
             # Batch insert for NSF programs
             if record['nsf_program']:
@@ -165,7 +180,11 @@ def load_data_to_rds(records):
                 program_ids = cur.fetchall()
                 
                 award_program_values = [(award_id, program_id[0]) for program_id in program_ids]
-                execute_values(cur, "INSERT INTO award_programs (award_id, program_id) VALUES %s ON CONFLICT DO NOTHING;", award_program_values)
+                execute_values(cur, """
+                    INSERT INTO award_programs (award_id, program_id) 
+                    VALUES %s 
+                    ON CONFLICT (award_id, program_id) DO NOTHING;
+                """, award_program_values)
 
             # Batch insert for field applications
             if record['fld_applictn']:
@@ -175,12 +194,20 @@ def load_data_to_rds(records):
                 field_ids = cur.fetchall()
                 
                 award_field_values = [(award_id, field_id[0]) for field_id in field_ids]
-                execute_values(cur, "INSERT INTO award_field_applications (award_id, field_application_id) VALUES %s ON CONFLICT DO NOTHING;", award_field_values)
+                execute_values(cur, """
+                    INSERT INTO award_field_applications (award_id, field_application_id) 
+                    VALUES %s 
+                    ON CONFLICT (award_id, field_application_id) DO NOTHING;
+                """, award_field_values)
 
             # Batch insert for program references
             if record['program_ref']:
                 ref_values = [(ref.strip(), award_id) for ref in record['program_ref'].split(',')]
-                execute_values(cur, "INSERT INTO program_refs (reference, award_id) VALUES %s;", ref_values)
+                execute_values(cur, """
+                    INSERT INTO program_refs (reference, award_id) 
+                    VALUES %s 
+                    ON CONFLICT (reference, award_id) DO NOTHING;
+                """, ref_values)
 
         conn.commit()
         logging.info(f"Successfully inserted batch of {len(records)} records")
