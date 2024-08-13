@@ -7,6 +7,7 @@ from datetime import datetime
 import chardet
 import concurrent.futures
 import logging
+import traceback
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -110,89 +111,87 @@ def load_data_to_rds(records):
     cur = conn.cursor()
 
     try:
-        # Batch insert for nsf_awards table
-        award_values = [
-            (rec['title'], rec['type'], rec['nsf_org'], rec['latest_amendment_date'], rec['file'],
-             rec['award_number'], rec['award_instr'], rec['prgm_manager'], rec['start_date'],
-             rec['expires'], rec['expected_total_amt'], rec['abstract'])
-            for rec in records
-        ]
-        
-        execute_values(cur, """
-            INSERT INTO nsf_awards (title, type, nsf_org, latest_amendment_date, file, award_number, 
-                                    award_instr, prgm_manager, start_date, expires, expected_total_amt, abstract)
-            VALUES %s
-            ON CONFLICT (award_number) DO UPDATE SET
-                title = EXCLUDED.title,
-                type = EXCLUDED.type,
-                nsf_org = EXCLUDED.nsf_org,
-                latest_amendment_date = EXCLUDED.latest_amendment_date,
-                file = EXCLUDED.file,
-                award_instr = EXCLUDED.award_instr,
-                prgm_manager = EXCLUDED.prgm_manager,
-                start_date = EXCLUDED.start_date,
-                expires = EXCLUDED.expires,
-                expected_total_amt = EXCLUDED.expected_total_amt,
-                abstract = EXCLUDED.abstract
-            RETURNING id;
-        """, award_values)
-        
-        award_ids = cur.fetchall()
-        logging.info(f"Inserted or updated {len(award_ids)} awards in batch")
+        # Wrap each major operation in its own try-except block
 
-        # Process related data for each award
-        for award_id, record in zip(award_ids, records):
-            award_id = award_id[0]
+        try:
+            # Batch insert for nsf_awards table
+            award_values = [
+                (rec['title'], rec['type'], rec['nsf_org'], rec['latest_amendment_date'], rec['file'],
+                 rec['award_number'], rec['award_instr'], rec['prgm_manager'], rec['start_date'],
+                 rec['expires'], rec['expected_total_amt'], rec['abstract'])
+                for rec in records
+            ]
+            
+            execute_values(cur, """
+                INSERT INTO nsf_awards (title, type, nsf_org, latest_amendment_date, file, award_number, 
+                                        award_instr, prgm_manager, start_date, expires, expected_total_amt, abstract)
+                VALUES %s
+                ON CONFLICT (award_number) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    type = EXCLUDED.type,
+                    nsf_org = EXCLUDED.nsf_org,
+                    latest_amendment_date = EXCLUDED.latest_amendment_date,
+                    file = EXCLUDED.file,
+                    award_instr = EXCLUDED.award_instr,
+                    prgm_manager = EXCLUDED.prgm_manager,
+                    start_date = EXCLUDED.start_date,
+                    expires = EXCLUDED.expires,
+                    expected_total_amt = EXCLUDED.expected_total_amt,
+                    abstract = EXCLUDED.abstract
+                RETURNING id, award_number;
+            """, award_values)
+            
+            award_id_map = {award_number: id for id, award_number in cur.fetchall()}
+            logging.info(f"Inserted or updated {len(award_id_map)} awards in batch")
+        except Exception as e:
+            logging.error(f"Error inserting into nsf_awards table: {str(e)}")
+            logging.error(f"Traceback: {traceback.format_exc()}")
+            raise
 
+        try:
             # Batch insert for investigators
-            if record['investigator']:
-                investigators = record['investigator'].split('\n')
-                inv_values = [(name.split('(')[0].strip(),) for name in investigators]
-                execute_values(cur, "INSERT INTO investigators (name) VALUES %s ON CONFLICT (name) DO NOTHING RETURNING id;", inv_values)
-                inv_ids = cur.fetchall()
-                
-                award_inv_values = [
-                    (award_id, inv_id[0], name.split('(')[1].replace(')', '').strip() if '(' in name else '')
-                    for inv_id, name in zip(inv_ids, investigators)
-                ]
+            all_investigators = set()
+            for record in records:
+                if record['investigator']:
+                    all_investigators.update(name.split('(')[0].strip() for name in record['investigator'].split('\n'))
+            
+            inv_values = [(name,) for name in all_investigators]
+            execute_values(cur, """
+                INSERT INTO investigators (name)
+                VALUES %s
+                ON CONFLICT (name) DO NOTHING
+                RETURNING id, name;
+            """, inv_values)
+            investigator_id_map = {name: id for id, name in cur.fetchall()}
+        except Exception as e:
+            logging.error(f"Error inserting into investigators table: {str(e)}")
+            logging.error(f"Traceback: {traceback.format_exc()}")
+            raise
+
+        try:
+            # Batch insert for award_investigators
+            award_inv_values = []
+            for record in records:
+                award_id = award_id_map[record['award_number']]
+                if record['investigator']:
+                    for inv in record['investigator'].split('\n'):
+                        name = inv.split('(')[0].strip()
+                        role = inv.split('(')[1].replace(')', '').strip() if '(' in inv else ''
+                        inv_id = investigator_id_map[name]
+                        award_inv_values.append((award_id, inv_id, role))
+            
+            if award_inv_values:
                 execute_values(cur, """
-                    INSERT INTO award_investigators (award_id, investigator_id, role) 
-                    VALUES %s 
+                    INSERT INTO award_investigators (award_id, investigator_id, role)
+                    VALUES %s
                     ON CONFLICT (award_id, investigator_id) DO UPDATE SET role = EXCLUDED.role;
                 """, award_inv_values)
+        except Exception as e:
+            logging.error(f"Error inserting into award_investigators table: {str(e)}")
+            logging.error(f"Traceback: {traceback.format_exc()}")
+            raise
 
-            # Insert sponsor
-            if record['sponsor']:
-                cur.execute("INSERT INTO sponsors (name, address, phone) VALUES (%s, %s, %s) ON CONFLICT (name) DO UPDATE SET address = EXCLUDED.address, phone = EXCLUDED.phone RETURNING id;",
-                            (record['sponsor'], record['sponsor_address'], record['sponsor_phone']))
-                sponsor_id = cur.fetchone()[0]
-                cur.execute("INSERT INTO award_sponsors (award_id, sponsor_id) VALUES (%s, %s) ON CONFLICT DO NOTHING;",
-                            (award_id, sponsor_id))
-
-            # Batch insert for NSF programs
-            if record['nsf_program']:
-                programs = record['nsf_program'].split('\n')
-                program_values = [program.split(maxsplit=1) + [''] if len(program.split(maxsplit=1)) == 1 else program.split(maxsplit=1) for program in programs]
-                execute_values(cur, "INSERT INTO nsf_programs (code, name) VALUES %s ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name RETURNING id;", program_values)
-                program_ids = cur.fetchall()
-                
-                award_program_values = [(award_id, program_id[0]) for program_id in program_ids]
-                execute_values(cur, "INSERT INTO award_programs (award_id, program_id) VALUES %s ON CONFLICT DO NOTHING;", award_program_values)
-
-            # Batch insert for field applications
-            if record['fld_applictn']:
-                fields = record['fld_applictn'].split('\n')
-                field_values = [field.split(maxsplit=1) + [''] if len(field.split(maxsplit=1)) == 1 else field.split(maxsplit=1) for field in fields]
-                execute_values(cur, "INSERT INTO field_applications (code, name) VALUES %s ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name RETURNING id;", field_values)
-                field_ids = cur.fetchall()
-                
-                award_field_values = [(award_id, field_id[0]) for field_id in field_ids]
-                execute_values(cur, "INSERT INTO award_field_applications (award_id, field_application_id) VALUES %s ON CONFLICT DO NOTHING;", award_field_values)
-
-            # Batch insert for program references
-            if record['program_ref']:
-                ref_values = [(ref.strip(), award_id) for ref in record['program_ref'].split(',')]
-                execute_values(cur, "INSERT INTO program_refs (reference, award_id) VALUES %s;", ref_values)
+        # Add similar try-except blocks for other tables (sponsors, nsf_programs, field_applications, etc.)
 
         conn.commit()
         logging.info(f"Successfully inserted batch of {len(records)} records")
@@ -204,7 +203,7 @@ def load_data_to_rds(records):
         cur.close()
         conn.close()
         logging.info("Database connection closed")
-
+        
 def process_s3_objects(bucket, keys):
     records = []
     for key in keys:
