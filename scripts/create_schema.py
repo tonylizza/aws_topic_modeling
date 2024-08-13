@@ -33,51 +33,31 @@ def create_schema():
 
     CREATE TABLE IF NOT EXISTS investigators (
         id SERIAL PRIMARY KEY,
-        name TEXT UNIQUE,
-        role TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS award_investigators (
-        award_id INTEGER REFERENCES nsf_awards(id),
-        investigator_id INTEGER REFERENCES investigators(id),
-        PRIMARY KEY (award_id, investigator_id)
+        name TEXT,
+        role TEXT,
+        award_id INTEGER REFERENCES nsf_awards(id)
     );
 
     CREATE TABLE IF NOT EXISTS sponsors (
         id SERIAL PRIMARY KEY,
-        name TEXT UNIQUE,
+        name TEXT,
         address TEXT,
-        phone TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS award_sponsors (
-        award_id INTEGER REFERENCES nsf_awards(id),
-        sponsor_id INTEGER REFERENCES sponsors(id),
-        PRIMARY KEY (award_id, sponsor_id)
+        phone TEXT,
+        award_id INTEGER REFERENCES nsf_awards(id)
     );
 
     CREATE TABLE IF NOT EXISTS nsf_programs (
         id SERIAL PRIMARY KEY,
         code TEXT,
-        name TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS award_programs (
-        award_id INTEGER REFERENCES nsf_awards(id),
-        program_id INTEGER REFERENCES nsf_programs(id),
-        PRIMARY KEY (award_id, program_id)
+        name TEXT,
+        award_id INTEGER REFERENCES nsf_awards(id)
     );
 
     CREATE TABLE IF NOT EXISTS field_applications (
         id SERIAL PRIMARY KEY,
         code TEXT,
-        name TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS award_field_applications (
-        award_id INTEGER REFERENCES nsf_awards(id),
-        field_application_id INTEGER REFERENCES field_applications(id),
-        PRIMARY KEY (award_id, field_application_id)
+        name TEXT,
+        award_id INTEGER REFERENCES nsf_awards(id)
     );
 
     CREATE TABLE IF NOT EXISTS program_refs (
