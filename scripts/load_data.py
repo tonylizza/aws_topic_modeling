@@ -6,23 +6,23 @@ from psycopg2.extras import execute_values
 from datetime import datetime
 import chardet
 import concurrent.futures
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Database connection details
 endpoint = os.getenv('RDS_ENDPOINT')
 db_password = os.getenv('DB_PASSWORD')
 s3_bucket = os.getenv('S3_BUCKET_RAW')
-s3_directory = os.getenv('S3_DIRECTORY', '')  # Specify the directory within the bucket
-batch_size = 1000  # Adjust based on performance testing
+s3_directory = os.getenv('S3_DIRECTORY', '')
+batch_size = 100  # Reduced batch size
 
 # Initialize S3 client
 s3 = boto3.client('s3')
 
-# Clean data by removing null characters and other invalid characters
 def clean_data(data):
-    for key, value in data.items():
-        if isinstance(value, str):
-            data[key] = value.replace('\x00', '').replace('\ufffd', '')  # Remove null and replacement characters
-    return data
+    return {k: v.replace('\x00', '').replace('\ufffd', '') if isinstance(v, str) else v for k, v in data.items()}
 
 def parse_award_file(file_content):
     data = {}
@@ -51,9 +51,8 @@ def parse_award_file(file_content):
             data[key] = match.group(1).strip()
         else:
             data[key] = None
-            print(f"Pattern not found for {key}")
+            logging.warning(f"Pattern not found for {key}")
 
-    # Extract sponsor information
     sponsor_match = re.search(
         r"Sponsor\s*:\s*(.*?)\n\s*(.*?)\n\s*(.*?)(\d{3}/\d{3}-\d{4})", file_content, re.MULTILINE
     )
@@ -62,228 +61,192 @@ def parse_award_file(file_content):
         data["sponsor_address"] = f"{sponsor_match.group(2).strip()}, {sponsor_match.group(3).strip()}"
         data["sponsor_phone"] = sponsor_match.group(4).strip()
     else:
-        data["sponsor"] = None
-        data["sponsor_address"] = None
-        data["sponsor_phone"] = None
-        print("Sponsor information not found.")
+        data["sponsor"] = data["sponsor_address"] = data["sponsor_phone"] = None
+        logging.warning("Sponsor information not found.")
 
     if data["abstract"]:
-        # Replace all instances of multiple whitespace characters with a single space
         data["abstract"] = re.sub(r'\s+', ' ', data["abstract"])
-
-        # Strip out strings of dashes or equals where five or more appear in succession
         data["abstract"] = re.sub(r'[-=]{5,}', '', data["abstract"])
-
-        # Remove leading numerical strings that are exactly seven digits long
         data["abstract"] = re.sub(r'^\d{7}\s+', '', data["abstract"])
 
-    # Parsing date fields
     for date_field in ['latest_amendment_date', 'start_date', 'expires']:
         if data[date_field]:
-            # Remove any extra text after the date
             cleaned_date = re.sub(r'\s+\(.*\)', '', data[date_field])
             try:
                 data[date_field] = datetime.strptime(cleaned_date, '%B %d, %Y').date()
             except ValueError as e:
-                print(f"Error parsing date for {date_field}: {cleaned_date}, error: {e}")
+                logging.error(f"Error parsing date for {date_field}: {cleaned_date}, error: {e}")
                 data[date_field] = None
 
-    # Convert expected_total_amt to float
     if data['expected_total_amt']:
-        data['expected_total_amt'] = float(data['expected_total_amt'].replace(',', ''))
+        try:
+            data['expected_total_amt'] = float(data['expected_total_amt'].replace(',', ''))
+        except ValueError:
+            logging.error(f"Error converting expected_total_amt to float: {data['expected_total_amt']}")
+            data['expected_total_amt'] = None
 
     return clean_data(data)
 
+def get_db_connection():
+    try:
+        conn = psycopg2.connect(
+            dbname='nsf_awards_db',
+            user='awarddbuser',
+            password=db_password,
+            host=endpoint,
+            port='5432'
+        )
+        logging.info("Successfully connected to the database")
+        return conn
+    except Exception as e:
+        logging.error(f"Error connecting to database: {e}")
+        return None
+
 def load_data_to_rds(records):
-    conn = psycopg2.connect(
-        dbname='nsf_awards_db',
-        user='awarddbuser',
-        password=db_password,
-        host=endpoint,
-        port='5432'
-    )
+    conn = get_db_connection()
+    if not conn:
+        return
+
     cur = conn.cursor()
 
-    insert_award_query = '''
-    INSERT INTO nsf_awards (title, type, nsf_org, latest_amendment_date, file, award_number, award_instr, prgm_manager, start_date, expires, expected_total_amt, abstract)
-    VALUES %s
-    RETURNING id;
-    '''
-
-    insert_investigator_query = '''
-    INSERT INTO investigators (name)
-    VALUES (%s)
-    ON CONFLICT (name) DO NOTHING
-    RETURNING id;
-    '''
-
-    insert_award_investigator_query = '''
-    INSERT INTO award_investigators (award_id, investigator_id, role)
-    VALUES (%s, %s, %s)
-    ON CONFLICT DO NOTHING;
-    '''
-
-    insert_sponsor_query = '''
-    INSERT INTO sponsors (name, address, phone)
-    VALUES (%s, %s, %s)
-    ON CONFLICT (name) DO UPDATE SET address = EXCLUDED.address, phone = EXCLUDED.phone
-    RETURNING id;
-    '''
-
-    insert_award_sponsor_query = '''
-    INSERT INTO award_sponsors (award_id, sponsor_id)
-    VALUES (%s, %s)
-    ON CONFLICT DO NOTHING;
-    '''
-
-    insert_program_query = '''
-    INSERT INTO nsf_programs (code, name)
-    VALUES (%s, %s)
-    ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name
-    RETURNING id;
-    '''
-
-    insert_award_program_query = '''
-    INSERT INTO award_programs (award_id, program_id)
-    VALUES (%s, %s)
-    ON CONFLICT DO NOTHING;
-    '''
-
-    insert_field_query = '''
-    INSERT INTO field_applications (code, name)
-    VALUES (%s, %s)
-    ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name
-    RETURNING id;
-    '''
-
-    insert_award_field_query = '''
-    INSERT INTO award_field_applications (award_id, field_application_id)
-    VALUES (%s, %s)
-    ON CONFLICT DO NOTHING;
-    '''
-
-    insert_ref_query = '''
-    INSERT INTO program_refs (reference, award_id)
-    VALUES (%s, %s);
-    '''
-
-    award_values = [
-        (rec['title'], rec['type'], rec['nsf_org'], rec['latest_amendment_date'], rec['file'],
-         rec['award_number'], rec['award_instr'], rec['prgm_manager'], rec['start_date'],
-         rec['expires'], rec['expected_total_amt'], rec['abstract'])
-        for rec in records
-    ]
-
     try:
-        execute_values(cur, insert_award_query, award_values)
+        # Batch insert for nsf_awards table
+        award_values = [
+            (rec['title'], rec['type'], rec['nsf_org'], rec['latest_amendment_date'], rec['file'],
+             rec['award_number'], rec['award_instr'], rec['prgm_manager'], rec['start_date'],
+             rec['expires'], rec['expected_total_amt'], rec['abstract'])
+            for rec in records
+        ]
+        
+        execute_values(cur, """
+            INSERT INTO nsf_awards (title, type, nsf_org, latest_amendment_date, file, award_number, 
+                                    award_instr, prgm_manager, start_date, expires, expected_total_amt, abstract)
+            VALUES %s
+            RETURNING id;
+        """, award_values)
+        
         award_ids = cur.fetchall()
+        logging.info(f"Inserted {len(award_ids)} awards in batch")
 
-        for award_id, rec in zip(award_ids, records):
+        # Process related data for each award
+        for award_id, record in zip(award_ids, records):
             award_id = award_id[0]
 
-            if rec['investigator']:
-                investigators = rec['investigator'].split('\n')
-                for inv in investigators:
-                    try:
-                        name_role = inv.split('(', 1)
-                        name = name_role[0].strip()
-                        role = name_role[1].replace(')', '').strip() if len(name_role) > 1 else ''
-                        cur.execute(insert_investigator_query, (name,))
-                        investigator_id = cur.fetchone()[0]
-                        cur.execute(insert_award_investigator_query, (award_id, investigator_id, role))
-                    except ValueError:
-                        print(f"Skipping malformed entry {inv}")
+            # Batch insert for investigators
+            if record['investigator']:
+                investigators = record['investigator'].split('\n')
+                inv_values = [(name.split('(')[0].strip(),) for name in investigators]
+                execute_values(cur, "INSERT INTO investigators (name) VALUES %s ON CONFLICT (name) DO NOTHING RETURNING id;", inv_values)
+                inv_ids = cur.fetchall()
+                
+                award_inv_values = [
+                    (award_id, inv_id[0], name.split('(')[1].replace(')', '').strip() if '(' in name else '')
+                    for inv_id, name in zip(inv_ids, investigators)
+                ]
+                execute_values(cur, "INSERT INTO award_investigators (award_id, investigator_id, role) VALUES %s ON CONFLICT DO NOTHING;", award_inv_values)
 
-            if rec['sponsor']:
-                cur.execute(insert_sponsor_query, (rec['sponsor'], rec['sponsor_address'], rec['sponsor_phone']))
+            # Insert sponsor (this is typically one per award, so we keep it as is)
+            if record['sponsor']:
+                cur.execute("INSERT INTO sponsors (name, address, phone) VALUES (%s, %s, %s) ON CONFLICT (name) DO UPDATE SET address = EXCLUDED.address, phone = EXCLUDED.phone RETURNING id;",
+                            (record['sponsor'], record['sponsor_address'], record['sponsor_phone']))
                 sponsor_id = cur.fetchone()[0]
-                cur.execute(insert_award_sponsor_query, (award_id, sponsor_id))
+                cur.execute("INSERT INTO award_sponsors (award_id, sponsor_id) VALUES (%s, %s) ON CONFLICT DO NOTHING;",
+                            (award_id, sponsor_id))
 
-            if rec['nsf_program']:
-                programs = rec['nsf_program'].split('\n')
-                for program in programs:
-                    parts = program.split(maxsplit=1)
-                    code = parts[0]
-                    name = parts[1] if len(parts) > 1 else ''
-                    cur.execute(insert_program_query, (code, name))
-                    program_id = cur.fetchone()[0]
-                    cur.execute(insert_award_program_query, (award_id, program_id))
+            # Batch insert for NSF programs
+            if record['nsf_program']:
+                programs = record['nsf_program'].split('\n')
+                program_values = [program.split(maxsplit=1) + [''] if len(program.split(maxsplit=1)) == 1 else program.split(maxsplit=1) for program in programs]
+                execute_values(cur, "INSERT INTO nsf_programs (code, name) VALUES %s ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name RETURNING id;", program_values)
+                program_ids = cur.fetchall()
+                
+                award_program_values = [(award_id, program_id[0]) for program_id in program_ids]
+                execute_values(cur, "INSERT INTO award_programs (award_id, program_id) VALUES %s ON CONFLICT DO NOTHING;", award_program_values)
 
-            if rec['fld_applictn']:
-                fields = rec['fld_applictn'].split('\n')
-                for field in fields:
-                    parts = field.split(maxsplit=1)
-                    code = parts[0]
-                    name = parts[1] if len(parts) > 1 else ''
-                    cur.execute(insert_field_query, (code, name))
-                    field_application_id = cur.fetchone()[0]
-                    cur.execute(insert_award_field_query, (award_id, field_application_id))
+            # Batch insert for field applications
+            if record['fld_applictn']:
+                fields = record['fld_applictn'].split('\n')
+                field_values = [field.split(maxsplit=1) + [''] if len(field.split(maxsplit=1)) == 1 else field.split(maxsplit=1) for field in fields]
+                execute_values(cur, "INSERT INTO field_applications (code, name) VALUES %s ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name RETURNING id;", field_values)
+                field_ids = cur.fetchall()
+                
+                award_field_values = [(award_id, field_id[0]) for field_id in field_ids]
+                execute_values(cur, "INSERT INTO award_field_applications (award_id, field_application_id) VALUES %s ON CONFLICT DO NOTHING;", award_field_values)
 
-            if rec['program_ref']:
-                references = rec['program_ref'].split(',')
-                for ref in references:
-                    cur.execute(insert_ref_query, (ref.strip(), award_id))
+            # Batch insert for program references
+            if record['program_ref']:
+                ref_values = [(ref.strip(), award_id) for ref in record['program_ref'].split(',')]
+                execute_values(cur, "INSERT INTO program_refs (reference, award_id) VALUES %s;", ref_values)
 
         conn.commit()
-    except psycopg2.Error as e:
-        print(f"Batch insert error: {e}")
+        logging.info(f"Successfully inserted batch of {len(records)} records")
+    except Exception as e:
         conn.rollback()
-
-    cur.close()
-    conn.close()
-
+        logging.error(f"Error inserting batch: {e}")
+    finally:
+        cur.close()
+        conn.close()
+        logging.info("Database connection closed")
 
 def process_s3_objects(bucket, keys):
     records = []
     for key in keys:
-        print(f"Processing {key}")
+        logging.info(f"Processing {key}")
         if key.endswith('.html'):
-            print(f"Skipping file {key} because it is an HTML file.")
-            continue
-
-        s3_object = s3.get_object(Bucket=bucket, Key=key)
-        raw_content = s3_object['Body'].read()
-
-        # Detect encoding
-        result = chardet.detect(raw_content)
-        encoding = result['encoding']
-        print(f"Detected encoding: {encoding}")
-
-        if not encoding:
-            print(f"Skipping file {key} because encoding could not be detected.")
+            logging.info(f"Skipping file {key} because it is an HTML file.")
             continue
 
         try:
+            s3_object = s3.get_object(Bucket=bucket, Key=key)
+            raw_content = s3_object['Body'].read()
+
+            result = chardet.detect(raw_content)
+            encoding = result['encoding']
+            logging.info(f"Detected encoding: {encoding}")
+
+            if not encoding:
+                logging.warning(f"Skipping file {key} because encoding could not be detected.")
+                continue
+
             file_content = raw_content.decode(encoding)
             award_data = parse_award_file(file_content)
             if not any(award_data.values()):
-                print(f"Skipping file {key} because it does not contain expected patterns.")
+                logging.warning(f"Skipping file {key} because it does not contain expected patterns.")
                 continue
             records.append(award_data)
-        except UnicodeDecodeError as e:
-            print(f"Skipping file {key} due to decode error: {e}")
+        except Exception as e:
+            logging.error(f"Error processing file {key}: {e}")
 
     if records:
         load_data_to_rds(records)
+    else:
+        logging.warning("No valid records found to load into the database.")
 
 def main():
+    logging.info("Starting the data loading process")
     paginator = s3.get_paginator('list_objects_v2')
     keys = []
     prefix = s3_directory if s3_directory else ''
     for page in paginator.paginate(Bucket=s3_bucket, Prefix=prefix):
-        for obj in page['Contents']:
+        for obj in page.get('Contents', []):
             keys.append(obj['Key'])
 
-    # Split keys into batches
+    if not keys:
+        logging.warning("No files found in the specified S3 bucket and directory.")
+        return
+
+    logging.info(f"Found {len(keys)} files to process")
     key_batches = [keys[i:i + batch_size] for i in range(0, len(keys), batch_size)]
 
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = [executor.submit(process_s3_objects, s3_bucket, batch) for batch in key_batches]
         for future in concurrent.futures.as_completed(futures):
             try:
                 future.result()
             except Exception as e:
-                print(f"Error processing batch: {e}")
+                logging.error(f"Error processing batch: {e}")
+
+    logging.info("Data loading process completed")
 
 if __name__ == '__main__':
     main()
